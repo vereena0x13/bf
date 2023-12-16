@@ -1,25 +1,78 @@
 #define VSTD_IMPL
 #include "vstd.hpp"
 
-// TODO: don't use a Hash_Table here...
-Hash_Table<u32, u32> compute_jump_table(str code) {
-    Hash_Table<u32, u32> jump_table;
-    jump_table.init();
 
+enum OpCode : u8 {
+    INC,
+    DEC,
+    RIGHT,
+    LEFT,
+    READ,
+    WRITE,
+    OPEN,
+    CLOSE,
+    SET,
+
+    INVALID,
+};
+
+
+struct Insn {
+    OpCode op;
+    u32 operand;
+
+    Insn(OpCode _op, u32 _operand = 0) : op(_op), operand(_operand) {}
+};
+
+static_assert(sizeof(Insn) == 8);
+
+
+Array<Insn> parse_brainfuck(str code) {
+    Array<Insn> insns;
     Array<u32> stack;
 
     for(u32 i = 0; i < strsz(code); i++) {
-        if(code[i] == '[') {
-            stack.push(i);
-        } else if(code[i] == ']') {
+        char c = code[i];
+        if(c == '+' || c == '-' || c == '>' || c == '<' || c == ',' || c == '.') {
+            u32 count = 1;
+
+            while(i + 1 < strsz(code) && code[i + 1] == c) {
+                i++;
+                count++;
+            }
+
+            OpCode op = INVALID;
+            if(c == '+') op = INC;
+            if(c == '-') op = DEC;
+            if(c == '>') op = RIGHT;
+            if(c == '<') op = LEFT;
+            if(c == ',') op = READ;
+            if(c == '.') op = WRITE;
+            assert(op != INVALID);
+
+            insns.push(Insn(op, count));
+        } else if(c == '[') {
+            if(i + 2 < strsz(code) && code[i + 1] == '-' && code[i + 2] == ']') {
+                insns.push(Insn(SET, 0));
+                i += 2;
+            } else {
+                u32 idx = insns.push(Insn(OPEN));
+                stack.push(idx);
+            }
+        } else if(c == ']') {
             u32 j = stack.pop();
-            jump_table.set(i, j + 1);
-            jump_table.set(j, i + 1);
+            insns[j].operand = insns.count + 1;
+            insns.push(Insn(CLOSE, j + 1));
+        } else {
+            // ignore
         }
     }
 
-    return jump_table;
+    stack.free();
+
+    return insns;
 }
+
 
 s32 main(s32 argc, cstr *argv) {
     if(argc < 2) {
@@ -27,68 +80,80 @@ s32 main(s32 argc, cstr *argv) {
         return 1;
     }
 
+
     auto code = read_entire_file(argv[1]);
+    auto ir = parse_brainfuck(code);
 
-    // TODO: filter non-bf characters out
-    // TODO: convert raw bf to an IR (contraction, etc.)
-    
-    auto jump_table = compute_jump_table(code);
 
-    Static_Array<u32, 1024 * 128> tape;
+    Static_Array<u8, 1024 * 128> tape;
+    for(u32 i = 0; i < tape.size; i++) tape[i] = 0;
+
     u32 ip = 0;
     u32 dp = 0;
 
-    while(ip < strsz(code)) {
-        switch(code[ip]) {
-            case '+': {
-                tape[dp]++;
+
+    while(ip < ir.count) {
+        auto const& insn = ir[ip];
+        switch(insn.op) {
+            case INC: {
+                tape[dp] = (tape[dp] + insn.operand) & 0xFF;
                 ip++;
                 break;
             }
-            case '-': {
-                tape[dp]--;
+            case DEC: {
+                tape[dp] = (tape[dp] - insn.operand) & 0xFF;
                 ip++;
                 break;
             }
-            case '<': {
-                dp--;
+            case RIGHT: {
+                dp += insn.operand;
                 ip++;
                 break;
             }
-            case '>': {
-                dp++;
+            case LEFT: {
+                dp -= insn.operand;
                 ip++;
                 break;
             }
-            case ',': {
+            case READ: {
                 // TODO
-                break;
-            }
-            case '.': {
-                printf("%c", tape[dp]);
-                fflush(stdout);
                 ip++;
                 break;
             }
-            case '[': {
+            case WRITE: {
+                for(u32 i = 0; i < insn.operand; i++) {
+                    printf("%c", tape[dp]);
+                    fflush(stdout);
+                }
+                ip++;
+                break;
+            }
+            case OPEN: {
                 if(tape[dp] == 0) {
-                    ip = jump_table.get(ip);
+                    ip = insn.operand;
                 } else {
                     ip++;
                 }
                 break;
             }
-            case ']': {
+            case CLOSE: {
                 if(tape[dp] != 0) {
-                    ip = jump_table.get(ip);
+                    ip = insn.operand;
                 } else {
                     ip++;
                 }
                 break;
+            }
+            case SET: {
+                tape[dp] = insn.operand & 0xFF;
+                ip++;
+                break;
+            }
+            case INVALID: {
+                assert(false);
             }
             default: {
-                ip++;
-                break;
+                assert(false);
             }
         }
     }
